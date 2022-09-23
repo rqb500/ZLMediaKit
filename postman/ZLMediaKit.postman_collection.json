@@ -578,6 +578,12 @@
 							"value": null,
 							"description": "hls保存根目录，置空使用默认目录",
 							"disabled": true
+						},
+						{
+							"key": "modify_stamp",
+							"value": null,
+							"description": "是否重新计算时间戳",
+							"disabled": true
 						}
 					]
 				}
@@ -816,6 +822,52 @@
 						"index",
 						"api",
 						"isMediaOnline"
+					],
+					"query": [
+						{
+							"key": "secret",
+							"value": "{{ZLMediaKit_secret}}",
+							"description": "api操作密钥(配置文件配置)，如果操作ip是127.0.0.1，则不需要此参数"
+						},
+						{
+							"key": "schema",
+							"value": "rtsp",
+							"description": "协议，例如 rtsp或rtmp"
+						},
+						{
+							"key": "vhost",
+							"value": "{{defaultVhost}}",
+							"description": "虚拟主机，例如__defaultVhost__"
+						},
+						{
+							"key": "app",
+							"value": "proxy",
+							"description": "应用名，例如 live"
+						},
+						{
+							"key": "stream",
+							"value": "1",
+							"description": "流id，例如 test"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "获取媒体流播放器列表(getMediaPlayerList)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{ZLMediaKit_URL}}/index/api/getMediaPlayerList?secret={{ZLMediaKit_secret}}&schema=rtsp&vhost={{defaultVhost}}&app=proxy&stream=1",
+					"host": [
+						"{{ZLMediaKit_URL}}"
+					],
+					"path": [
+						"index",
+						"api",
+						"getMediaPlayerList"
 					],
 					"query": [
 						{
@@ -1332,9 +1384,9 @@
 							"description": "绑定的端口，0时为随机端口"
 						},
 						{
-							"key": "enable_tcp",
+							"key": "tcp_mode",
 							"value": "1",
-							"description": "创建 udp端口时是否同时监听tcp端口"
+							"description": "tcp模式，0时为不启用tcp监听，1时为启用tcp监听，2时为tcp主动连接模式"
 						},
 						{
 							"key": "stream_id",
@@ -1352,6 +1404,47 @@
 							"value": "0",
 							"description": "是否指定收流的rtp ssrc, 十进制数字，不指定或指定0时则不过滤rtp，非必选参数",
 							"disabled": true
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "连接RTP服务器(connectRtpServer)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{ZLMediaKit_URL}}/index/api/connectRtpServer?secret={{ZLMediaKit_secret}}&dst_url=127.0.0.1&dst_port=10000&stream_id=test",
+					"host": [
+						"{{ZLMediaKit_URL}}"
+					],
+					"path": [
+						"index",
+						"api",
+						"connectRtpServer"
+					],
+					"query": [
+						{
+							"key": "secret",
+							"value": "{{ZLMediaKit_secret}}",
+							"description": "api操作密钥(配置文件配置)，如果操作ip是127.0.0.1，则不需要此参数"
+						},
+						{
+							"key": "dst_url",
+							"value": "0",
+							"description": "tcp主动模式时服务端地址"
+						},
+						{
+							"key": "dst_port",
+							"value": "1",
+							"description": "tcp主动模式时服务端端口"
+						},
+						{
+							"key": "stream_id",
+							"value": "test",
+							"description": "OpenRtpServer时绑定的流id\n"
 						}
 					]
 				}

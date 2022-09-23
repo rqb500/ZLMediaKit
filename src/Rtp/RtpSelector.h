@@ -31,20 +31,18 @@ public:
 
 protected:
     // 通知其停止推流
-    bool close(MediaSource &sender,bool force) override;
-    // 观看总人数
-    int totalReaderCount(MediaSource &sender) override;
+    bool close(MediaSource &sender) override;
 
 private:
-    std::weak_ptr<RtpSelector > _parent;
-    RtpProcess::Ptr _process;
     std::string _stream_id;
+    RtpProcess::Ptr _process;
+    std::weak_ptr<RtpSelector> _parent;
 };
 
 class RtpSelector : public std::enable_shared_from_this<RtpSelector>{
 public:
-    RtpSelector();
-    ~RtpSelector();
+    RtpSelector() = default;
+    ~RtpSelector() = default;
 
     static bool getSSRC(const char *data,size_t data_len, uint32_t &ssrc);
     static RtpSelector &Instance();

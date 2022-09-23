@@ -20,6 +20,8 @@ using namespace toolkit;
 namespace mediakit {
 
 MP4Reader::MP4Reader(const string &vhost, const string &app, const string &stream_id, const string &file_path) {
+    //读写文件建议放在后台线程
+    _poller = WorkThreadPool::Instance().getPoller();
     _file_path = file_path;
     if (_file_path.empty()) {
         GET_CONFIG(string, recordPath, Record::kFilePath);
@@ -105,7 +107,7 @@ void MP4Reader::stopReadMP4() {
     _timer = nullptr;
 }
 
-void MP4Reader::startReadMP4(const EventPoller::Ptr &poller_in, uint64_t sample_ms, bool ref_self, bool file_repeat) {
+void MP4Reader::startReadMP4(uint64_t sample_ms, bool ref_self, bool file_repeat) {
     GET_CONFIG(uint32_t, sampleMS, Record::kSampleMS);
     auto strong_self = shared_from_this();
     if (_muxer) {
@@ -114,8 +116,6 @@ void MP4Reader::startReadMP4(const EventPoller::Ptr &poller_in, uint64_t sample_
         while (!_muxer->isAllTrackReady() && readNextSample()) {}
     }
 
-    //未指定线程，那么使用后台线程(读写文件采用后台线程)
-    auto poller = poller_in ? poller_in : WorkThreadPool::Instance().getPoller();
     auto timer_sec = (sample_ms ? sample_ms : sampleMS) / 1000.0f;
 
     //启动定时器
@@ -123,7 +123,7 @@ void MP4Reader::startReadMP4(const EventPoller::Ptr &poller_in, uint64_t sample_
         _timer = std::make_shared<Timer>(timer_sec, [strong_self]() {
             lock_guard<recursive_mutex> lck(strong_self->_mtx);
             return strong_self->readSample();
-        }, poller);
+        }, _poller);
     } else {
         weak_ptr<MP4Reader> weak_self = strong_self;
         _timer = std::make_shared<Timer>(timer_sec, [weak_self]() {
@@ -133,7 +133,7 @@ void MP4Reader::startReadMP4(const EventPoller::Ptr &poller_in, uint64_t sample_
             }
             lock_guard<recursive_mutex> lck(strong_self->_mtx);
             return strong_self->readSample();
-        }, poller);
+        }, _poller);
     }
 
     _file_repeat = file_repeat;
@@ -230,17 +230,10 @@ bool MP4Reader::seekTo(uint32_t stamp_seek) {
     return false;
 }
 
-bool MP4Reader::close(MediaSource &sender, bool force) {
-    if (!_muxer || (!force && _muxer->totalReaderCount())) {
-        return false;
-    }
-    _timer.reset();
-    WarnL << sender.getSchema() << "/" << sender.getVhost() << "/" << sender.getApp() << "/" << sender.getId() << " " << force;
+bool MP4Reader::close(MediaSource &sender) {
+    _timer = nullptr;
+    WarnL << "close media: " << sender.getUrl();
     return true;
-}
-
-int MP4Reader::totalReaderCount(MediaSource &sender) {
-    return _muxer ? _muxer->totalReaderCount() : sender.readerCount();
 }
 
 MediaOriginType MP4Reader::getOriginType(MediaSource &sender) const {
@@ -249,6 +242,10 @@ MediaOriginType MP4Reader::getOriginType(MediaSource &sender) const {
 
 string MP4Reader::getOriginUrl(MediaSource &sender) const {
     return _file_path;
+}
+
+toolkit::EventPoller::Ptr MP4Reader::getOwnerPoller(MediaSource &sender) {
+    return _poller;
 }
 
 } /* namespace mediakit */

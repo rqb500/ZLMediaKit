@@ -52,9 +52,7 @@ RtpProcess::RtpProcess(const string &stream_id) {
 RtpProcess::~RtpProcess() {
     uint64_t duration = (_last_frame_time.createdTime() - _last_frame_time.elapsedTime()) / 1000;
     WarnP(this) << "RTP推流器("
-                << _media_info._vhost << "/"
-                << _media_info._app << "/"
-                << _media_info._streamid
+                << _media_info.shortUrl()
                 << ")断开,耗时(s):" << duration;
 
     //流量统计事件广播
@@ -94,6 +92,9 @@ bool RtpProcess::inputRtp(bool is_udp, const Socket::Ptr &sock, const char *data
     if (!_process) {
         _process = std::make_shared<GB28181Process>(_media_info, this);
     }
+
+    auto header = (RtpHeader *) data;
+    onRtp(ntohs(header->seq), ntohl(header->stamp), 0/*不发送sr,所以可以设置为0*/ , 90000/*ps/ts流时间戳按照90K采样率*/, len);
 
     GET_CONFIG(string, dump_dir, RtpProxy::kDumpDir);
     if (_muxer && !_muxer->isEnabled() && !dts_out && dump_dir.empty()) {
@@ -229,14 +230,6 @@ string RtpProcess::getIdentifier() const {
     return _media_info._streamid;
 }
 
-int RtpProcess::getTotalReaderCount() {
-    return _muxer ? _muxer->totalReaderCount() : 0;
-}
-
-void RtpProcess::setListener(const std::weak_ptr<MediaSourceEvent> &listener) {
-    setDelegate(listener);
-}
-
 void RtpProcess::emitOnPublish() {
     weak_ptr<RtpProcess> weak_self = shared_from_this();
     Broadcast::PublishAuthInvoker invoker = [weak_self](const string &err, const ProtocolOption &option) {
@@ -277,7 +270,7 @@ MediaOriginType RtpProcess::getOriginType(MediaSource &sender) const{
 }
 
 string RtpProcess::getOriginUrl(MediaSource &sender) const {
-    return _media_info._schema + "://" + _media_info._vhost + "/" + _media_info._app + "/" + _media_info._streamid;
+    return _media_info.getUrl();
 }
 
 std::shared_ptr<SockInfo> RtpProcess::getOriginSock(MediaSource &sender) const {
@@ -285,23 +278,15 @@ std::shared_ptr<SockInfo> RtpProcess::getOriginSock(MediaSource &sender) const {
 }
 
 toolkit::EventPoller::Ptr RtpProcess::getOwnerPoller(MediaSource &sender) {
-    return _sock ? _sock->getPoller() : nullptr;
+    return _sock ? _sock->getPoller() : EventPollerPool::Instance().getPoller();
 }
 
-void RtpProcess::setHelper(std::weak_ptr<RtcpContext> help) {
-	_help = std::move(help);
-}
-
-int RtpProcess::getLossRate(MediaSource &sender, TrackType type) {
-     auto help = _help.lock();
-	 if (!help) {
-	 	return -1;	
-	 }
-     auto expected =  help->getExpectedPacketsInterval();
-     if (!expected) {
-        return 0;
-     }
-     return help->geLostInterval() * 100 / expected;
+float RtpProcess::getLossRate(MediaSource &sender, TrackType type) {
+    auto expected = getExpectedPacketsInterval();
+    if (!expected) {
+        return -1;
+    }
+    return geLostInterval() * 100 / expected;
 }
 
 }//namespace mediakit

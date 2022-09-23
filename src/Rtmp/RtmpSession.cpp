@@ -31,9 +31,7 @@ void RtmpSession::onError(const SockException& err) {
     bool is_player = !_push_src_ownership;
     uint64_t duration = _ticker.createdTime() / 1000;
     WarnP(this) << (is_player ? "RTMP播放器(" : "RTMP推流器(")
-                << _media_info._vhost << "/"
-                << _media_info._app << "/"
-                << _media_info._streamid
+                << _media_info.shortUrl()
                 << ")断开:" << err.what()
                 << ",耗时(s):" << duration;
 
@@ -199,13 +197,13 @@ void RtmpSession::onCmd_publish(AMFDecoder &dec) {
     }
 
     Broadcast::PublishAuthInvoker invoker = [weak_self, on_res, pToken](const string &err, const ProtocolOption &option) {
-        auto strongSelf = weak_self.lock();
-        if (!strongSelf) {
+        auto strong_self = weak_self.lock();
+        if (!strong_self) {
             return;
         }
-        strongSelf->async([weak_self, on_res, err, pToken, option]() {
-            auto strongSelf = weak_self.lock();
-            if (!strongSelf) {
+        strong_self->async([weak_self, on_res, err, pToken, option]() {
+            auto strong_self = weak_self.lock();
+            if (!strong_self) {
                 return;
             }
             on_res(err, option);
@@ -256,10 +254,7 @@ void RtmpSession::sendPlayResponse(const string &err, const RtmpMediaSource::Ptr
                  "clientid", "0" });
 
     if (!ok) {
-        string err_msg = StrPrinter << (auth_success ? "no such stream:" : err.data()) << " "
-                                    << _media_info._vhost << " "
-                                    << _media_info._app << " "
-                                    << _media_info._streamid;
+        string err_msg = StrPrinter << (auth_success ? "no such stream:" : err.data()) << " " << _media_info.shortUrl();
         shutdown(SockException(Err_shutdown, err_msg));
         return;
     }
@@ -307,28 +302,29 @@ void RtmpSession::sendPlayResponse(const string &err, const RtmpMediaSource::Ptr
 
     src->pause(false);
     _ring_reader = src->getRing()->attach(getPoller());
-    weak_ptr<RtmpSession> weakSelf = dynamic_pointer_cast<RtmpSession>(shared_from_this());
-    _ring_reader->setReadCB([weakSelf](const RtmpMediaSource::RingDataType &pkt) {
-        auto strongSelf = weakSelf.lock();
-        if (!strongSelf) {
+    weak_ptr<RtmpSession> weak_self = dynamic_pointer_cast<RtmpSession>(shared_from_this());
+    _ring_reader->setGetInfoCB([weak_self]() { return weak_self.lock(); });
+    _ring_reader->setReadCB([weak_self](const RtmpMediaSource::RingDataType &pkt) {
+        auto strong_self = weak_self.lock();
+        if (!strong_self) {
             return;
         }
         size_t i = 0;
         auto size = pkt->size();
-        strongSelf->setSendFlushFlag(false);
+        strong_self->setSendFlushFlag(false);
         pkt->for_each([&](const RtmpPacket::Ptr &rtmp){
             if(++i == size){
-                strongSelf->setSendFlushFlag(true);
+                strong_self->setSendFlushFlag(true);
             }
-            strongSelf->onSendMedia(rtmp);
+            strong_self->onSendMedia(rtmp);
         });
     });
-    _ring_reader->setDetachCB([weakSelf]() {
-        auto strongSelf = weakSelf.lock();
-        if (!strongSelf) {
+    _ring_reader->setDetachCB([weak_self]() {
+        auto strong_self = weak_self.lock();
+        if (!strong_self) {
             return;
         }
-        strongSelf->shutdown(SockException(Err_shutdown,"rtmp ring buffer detached"));
+        strong_self->shutdown(SockException(Err_shutdown,"rtmp ring buffer detached"));
     });
     src->pause(false);
     _play_src = src;
@@ -360,9 +356,9 @@ void RtmpSession::doPlay(AMFDecoder &dec){
     std::shared_ptr<Ticker> ticker(new Ticker);
     weak_ptr<RtmpSession> weak_self = dynamic_pointer_cast<RtmpSession>(shared_from_this());
     std::shared_ptr<onceToken> token(new onceToken(nullptr, [ticker,weak_self](){
-        auto strongSelf = weak_self.lock();
-        if (strongSelf) {
-            DebugP(strongSelf.get()) << "play 回复时间:" << ticker->elapsedTime() << "ms";
+        auto strong_self = weak_self.lock();
+        if (strong_self) {
+            DebugP(strong_self.get()) << "play 回复时间:" << ticker->elapsedTime() << "ms";
         }
     }));
     Broadcast::AuthInvoker invoker = [weak_self,token](const string &err){
@@ -573,13 +569,10 @@ void RtmpSession::onSendMedia(const RtmpPacket::Ptr &pkt) {
     sendRtmp(pkt->type_id, pkt->stream_index, pkt, pkt->time_stamp, pkt->chunk_id);
 }
 
-bool RtmpSession::close(MediaSource &sender,bool force)  {
+bool RtmpSession::close(MediaSource &sender) {
     //此回调在其他线程触发
-    if(!_push_src || (!force && _push_src->totalReaderCount())){
-        return false;
-    }
-    string err = StrPrinter << "close media:" << sender.getSchema() << "/" << sender.getVhost() << "/" << sender.getApp() << "/" << sender.getId() << " " << force;
-    safeShutdown(SockException(Err_shutdown,err));
+    string err = StrPrinter << "close media: " << sender.getUrl();
+    safeShutdown(SockException(Err_shutdown, err));
     return true;
 }
 
@@ -597,10 +590,6 @@ string RtmpSession::getOriginUrl(MediaSource &sender) const {
 
 std::shared_ptr<SockInfo> RtmpSession::getOriginSock(MediaSource &sender) const {
     return const_cast<RtmpSession *>(this)->shared_from_this();
-}
-
-toolkit::EventPoller::Ptr RtmpSession::getOwnerPoller(MediaSource &sender) {
-    return getPoller();
 }
 
 void RtmpSession::setSocketFlags(){
@@ -622,6 +611,6 @@ void RtmpSession::dumpMetadata(const AMFValue &metadata) {
     metadata.object_for_each([&](const string &key, const AMFValue &val) {
         printer << "\r\n" << key << "\t:" << val.to_string();
     });
-    InfoL << _media_info._vhost << " " << _media_info._app << " " << _media_info._streamid << (string) printer;
+    InfoL << _media_info.shortUrl() << (string) printer;
 }
 } /* namespace mediakit */

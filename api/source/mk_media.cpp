@@ -60,19 +60,15 @@ public:
 
 protected:
     // 通知其停止推流
-    bool close(MediaSource &sender,bool force) override{
-        if(!force && _channel->totalReaderCount()){
-            //非强制关闭且正有人在观看该视频
-            return false;
-        }
-        if(!_on_close){
+    bool close(MediaSource &sender) override {
+        if (!_on_close) {
             //未设置回调，没法关闭
             WarnL << "请使用mk_media_set_on_close函数设置回调函数!";
             return false;
         }
         //请在回调中调用mk_media_release函数释放资源,否则MediaSource::close()操作不会生效
         _on_close(_on_close_data);
-        WarnL << "close media:" << sender.getSchema() << "/" << sender.getVhost() << "/" << sender.getApp() << "/" << sender.getId() << " " << force;
+        WarnL << "close media: " << sender.getUrl();
         return true;
     }
 
@@ -97,11 +93,6 @@ protected:
             return false;
         }
         return _on_speed(_on_speed_data, speed);
-    }
-
-    // 观看总人数
-    int totalReaderCount(MediaSource &sender) override{
-        return _channel->totalReaderCount();
     }
 
     void onRegist(MediaSource &sender, bool regist) override{
@@ -265,17 +256,29 @@ API_EXPORT void API_CALL mk_media_start_send_rtp(mk_media ctx, const char *dst_u
     args.ssrc = ssrc;
     args.is_udp = is_udp;
 
-    //sender参数无用
-    (*obj)->getChannel()->startSendRtp(MediaSource::NullMediaSource(), args, [cb, user_data](uint16_t local_port, const SockException &ex){
-        if (cb) {
-            cb(user_data, local_port, ex.getErrCode(), ex.what());
-        }
+    // sender参数无用
+    auto ref = *obj;
+    (*obj)->getOwnerPoller(MediaSource::NullMediaSource())->async([args, ref, cb, user_data]() {
+        ref->getChannel()->startSendRtp(MediaSource::NullMediaSource(), args, [cb, user_data](uint16_t local_port, const SockException &ex) {
+            if (cb) {
+                cb(user_data, local_port, ex.getErrCode(), ex.what());
+            }
+        });
     });
 }
 
-API_EXPORT int API_CALL mk_media_stop_send_rtp(mk_media ctx, const char *ssrc){
+API_EXPORT void API_CALL mk_media_stop_send_rtp(mk_media ctx, const char *ssrc){
     assert(ctx);
-    MediaHelper::Ptr *obj = (MediaHelper::Ptr *) ctx;
-    //sender参数无用
-    return (*obj)->getChannel()->stopSendRtp(MediaSource::NullMediaSource(), ssrc ? ssrc : "");
+    MediaHelper::Ptr *obj = (MediaHelper::Ptr *)ctx;
+    // sender参数无用
+    auto ref = *obj;
+    string ssrc_str = ssrc ? ssrc : "";
+    (*obj)->getOwnerPoller(MediaSource::NullMediaSource())->async([ref, ssrc_str]() {
+        ref->getChannel()->stopSendRtp(MediaSource::NullMediaSource(), ssrc_str);
+    });
+}
+
+API_EXPORT mk_thread API_CALL mk_media_get_owner_thread(mk_media ctx) {
+    MediaHelper::Ptr *obj = (MediaHelper::Ptr *)ctx;
+    return (*obj)->getOwnerPoller(MediaSource::NullMediaSource()).get();
 }

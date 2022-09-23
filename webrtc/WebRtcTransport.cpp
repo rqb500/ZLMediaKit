@@ -8,15 +8,18 @@
  * may be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "WebRtcTransport.h"
-#include "Rtcp/Rtcp.h"
-#include "Rtcp/RtcpFCI.h"
-#include "RtpExt.h"
-#include "Rtsp/RtpReceiver.h"
-
+#include <iostream>
 #include <srtp2/srtp.h>
 
-#include <iostream>
+#include "RtpExt.h"
+#include "Rtcp/Rtcp.h"
+#include "Rtcp/RtcpFCI.h"
+#include "Rtsp/RtpReceiver.h"
+#include "WebRtcTransport.h"
+
+#include "WebRtcEchoTest.h"
+#include "WebRtcPlayer.h"
+#include "WebRtcPusher.h"
 
 #define RTP_SSRC_OFFSET 1
 #define RTX_SSRC_OFFSET 2
@@ -26,10 +29,11 @@
 #define RTP_MSID RTP_MSLABEL " " RTP_LABEL
 
 using namespace std;
-using namespace mediakit;
+
+namespace mediakit {
 
 // RTC配置项目
-namespace RTC {
+namespace Rtc {
 #define RTC_FIELD "rtc."
 // rtp和rtcp接受超时时间
 const string kTimeOutSec = RTC_FIELD "timeoutSec";
@@ -246,7 +250,7 @@ void WebRtcTransport::setRemoteDtlsFingerprint(const RtcSession &remote) {
 
 void WebRtcTransport::onRtcConfigure(RtcConfigure &configure) const {
     // 开启remb后关闭twcc，因为开启twcc后remb无效
-    GET_CONFIG(size_t, remb_bit_rate, RTC::kRembBitRate);
+    GET_CONFIG(size_t, remb_bit_rate, Rtc::kRembBitRate);
     configure.enableTWCC(!remb_bit_rate);
 }
 
@@ -368,7 +372,7 @@ void WebRtcTransportImp::onCreate() {
     registerSelf();
 
     weak_ptr<WebRtcTransportImp> weak_self = static_pointer_cast<WebRtcTransportImp>(shared_from_this());
-    GET_CONFIG(float, timeoutSec, RTC::kTimeOutSec);
+    GET_CONFIG(float, timeoutSec, Rtc::kTimeOutSec);
     _timer = std::make_shared<Timer>(
         timeoutSec / 2,
         [weak_self]() {
@@ -511,7 +515,7 @@ void WebRtcTransportImp::onStartWebRTC() {
 
 void WebRtcTransportImp::onCheckAnswer(RtcSession &sdp) {
     // 修改answer sdp的ip、端口信息
-    GET_CONFIG_FUNC(std::vector<std::string>, extern_ips, RTC::kExternIP, [](string str) {
+    GET_CONFIG_FUNC(std::vector<std::string>, extern_ips, Rtc::kExternIP, [](string str) {
         std::vector<std::string> ret;
         if (str.length()) {
             ret = split(str, ",");
@@ -525,7 +529,7 @@ void WebRtcTransportImp::onCheckAnswer(RtcSession &sdp) {
         m.rtcp_addr.reset();
         m.rtcp_addr.address = m.addr.address;
 
-        GET_CONFIG(uint16_t, local_port, RTC::kPort);
+        GET_CONFIG(uint16_t, local_port, Rtc::kPort);
         m.rtcp_addr.port = local_port;
         m.port = m.rtcp_addr.port;
         sdp.origin.address = m.addr.address;
@@ -592,9 +596,9 @@ makeIceCandidate(std::string ip, uint16_t port, uint32_t priority = 100, std::st
 void WebRtcTransportImp::onRtcConfigure(RtcConfigure &configure) const {
     WebRtcTransport::onRtcConfigure(configure);
 
-    GET_CONFIG(uint16_t, local_port, RTC::kPort);
+    GET_CONFIG(uint16_t, local_port, Rtc::kPort);
     // 添加接收端口candidate信息
-    GET_CONFIG_FUNC(std::vector<std::string>, extern_ips, RTC::kExternIP, [](string str) {
+    GET_CONFIG_FUNC(std::vector<std::string>, extern_ips, Rtc::kExternIP, [](string str) {
         std::vector<std::string> ret;
         if (str.length()) {
             ret = split(str, ",");
@@ -650,10 +654,10 @@ public:
         return _rtcp_context.createRtcpRR(ssrc, getSSRC());
     }
 
-    int getLossRate() {
+    float getLossRate() {
         auto expected = _rtcp_context.getExpectedPacketsInterval();
         if (!expected) {
-            return 0;
+            return -1;
         }
         return _rtcp_context.geLostInterval() * 100 / expected;
     }
@@ -698,7 +702,7 @@ std::shared_ptr<RtpChannel> MediaTrack::getRtpChannel(uint32_t ssrc) const {
     return it_chn->second;
 }
 
-int WebRtcTransportImp::getLossRate(mediakit::TrackType type) {
+float WebRtcTransportImp::getLossRate(TrackType type) {
     for (auto &pr : _ssrc_to_track) {
         auto ssrc = pr.first;
         auto &track = pr.second;
@@ -718,6 +722,7 @@ void WebRtcTransportImp::onRtcp(const char *buf, size_t len) {
     for (auto rtcp : rtcps) {
         switch ((RtcpType)rtcp->pt) {
         case RtcpType::RTCP_SR: {
+            _alive_ticker.resetTime();
             // 对方汇报rtp发送情况
             RtcpSR *sr = (RtcpSR *)rtcp;
             auto it = _ssrc_to_track.find(sr->ssrc);
@@ -766,6 +771,7 @@ void WebRtcTransportImp::onRtcp(const char *buf, size_t len) {
                 }
                 _ssrc_to_track.erase(it);
             }
+            onRtcpBye();
             onShutdown(SockException(Err_eof, "rtcp bye message received"));
             break;
         }
@@ -940,7 +946,7 @@ void WebRtcTransportImp::onSortedRtp(MediaTrack &track, const string &rid, RtpPa
         sendRtcpPli(rtp->getSSRC());
 
         // 开启remb，则发送remb包调节比特率
-        GET_CONFIG(size_t, remb_bit_rate, RTC::kRembBitRate);
+        GET_CONFIG(size_t, remb_bit_rate, Rtc::kRembBitRate);
         if (remb_bit_rate && _answer_sdp->supportRtcpFb(SdpConst::kRembRtcpFb)) {
             sendRtcpRemb(rtp->getSSRC(), remb_bit_rate);
         }
@@ -1051,6 +1057,8 @@ uint64_t WebRtcTransportImp::getDuration() const {
     return _alive_ticker.createdTime() / 1000;
 }
 
+void WebRtcTransportImp::onRtcpBye(){}
+
 /////////////////////////////////////////////////////////////////////////////////////////////
 
 void WebRtcTransportImp::registerSelf() {
@@ -1116,10 +1124,6 @@ void WebRtcPluginManager::getAnswerSdp(
     }
     it->second(sender, offer, args, cb);
 }
-
-#include "WebRtcEchoTest.h"
-#include "WebRtcPlayer.h"
-#include "WebRtcPusher.h"
 
 void echo_plugin(
     Session &sender, const string &offer, const WebRtcArgs &args, const WebRtcPluginManager::onCreateRtc &cb) {
@@ -1223,3 +1227,5 @@ static onceToken s_rtc_auto_register([]() {
     WebRtcPluginManager::Instance().registerPlugin("push", push_plugin);
     WebRtcPluginManager::Instance().registerPlugin("play", play_plugin);
 });
+
+}// namespace mediakit
